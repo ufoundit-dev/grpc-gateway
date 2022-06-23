@@ -1031,7 +1031,6 @@ func renderServices(services []*descriptor.Service, paths openapiPathsObject, re
 			}
 
 			for bIdx, b := range meth.Bindings {
-				operationFunc := operationForMethod(b.HTTPMethod)
 				// Iterate over all the OpenAPI parameters
 				parameters := openapiParametersObject{}
 				// split the path template into its parts
@@ -1226,50 +1225,14 @@ func renderServices(services []*descriptor.Service, paths openapiPathsObject, re
 				parameters = append(parameters, queryParams...)
 
 				path := partsToOpenAPIPath(parts, pathParamNames)
-				pathItemObject, ok := paths[path]
-				if !ok {
-					pathItemObject = openapiPathItemObject{}
-				} else {
-					// handle case where we have an existing mapping for the same path and method
-					existingOperationObject := operationFunc(&pathItemObject)
-					if existingOperationObject != nil {
-						var firstPathParameter *openapiParameterObject
-						var firstParamIndex int
-						for index, param := range parameters {
-							if param.In == "path" {
-								firstPathParameter = &param
-								firstParamIndex = index
-								break
-							}
-						}
-						if firstPathParameter == nil {
-							// Without a path parameter, there is nothing to vary to support multiple mappings of the same path/method.
-							// Previously this did not log an error and only overwrote the mapping, we now log the error but
-							// still overwrite the mapping
-							glog.Errorf("Duplicate mapping for path %s %s", b.HTTPMethod, path)
-						} else {
-							newPathCount := 0
-							var newPath string
-							var newPathElement string
-							// Iterate until there is not an existing operation that matches the same escaped path.
-							// Most of the time this will only be a single iteration, but a large API could technically have
-							// a pretty large amount of these if it used similar patterns for all its functions.
-							for existingOperationObject != nil {
-								newPathCount += 1
-								newPathElement = firstPathParameter.Name + pathParamUniqueSuffixDeliminator + strconv.Itoa(newPathCount)
-								newPath = strings.ReplaceAll(path, "{"+firstPathParameter.Name+"}", "{"+newPathElement+"}")
-								if newPathItemObject, ok := paths[newPath]; ok {
-									existingOperationObject = operationFunc(&newPathItemObject)
-								} else {
-									existingOperationObject = nil
-								}
-							}
-							// update the pathItemObject we are adding to with the new path
-							pathItemObject = paths[newPath]
-							firstPathParameter.Name = newPathElement
-							path = newPath
-							parameters[firstParamIndex] = *firstPathParameter
-						}
+				pathItemObject := openapiPathItemObject{}
+				for i := range parameters {
+					if parameters[i].In == "path" {
+						newName := fixNameInPathParameter(svc, parameters[i].Name)
+						path = strings.ReplaceAll(path, "{"+parameters[i].Name+"}", "{"+newName+"}")
+						parameters[i].Name = newName
+						pathItemObject = paths[path]
+						break
 					}
 				}
 
@@ -2826,4 +2789,12 @@ func getFieldConfiguration(reg *descriptor.Registry, fd *descriptor.Field) *open
 		return j.GetFieldConfiguration()
 	}
 	return nil
+}
+
+func fixNameInPathParameter(svc *descriptor.Service, name string) string {
+	if name != "name" {
+		return name
+	}
+	svcName := strings.ReplaceAll(svc.GetName(), "Service", "")
+	return strings.ToLower(svcName[:1]) + svcName[1:] + strings.ToUpper(name[:1]) + name[1:]
 }
